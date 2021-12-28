@@ -1,4 +1,4 @@
-module tgsticker
+module mixinsticker
 
 go 1.17
 

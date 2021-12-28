@@ -1,1 +1,1 @@
-# tg-sticker
+# mixin-sticker
