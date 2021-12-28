@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 
@@ -12,7 +13,8 @@ import (
 	"github.com/gofrs/uuid"
 )
 
-func handleMessage(ctx context.Context, db *sql.DB, msg *mixin.MessageView) error {
+func handleMessage(msg *mixin.MessageView) error {
+	log.Printf("handle message ID: %s", msg.MessageID)
 	if msg.Category != mixin.MessageCategoryPlainText {
 		data := fmt.Sprintf("Only support message like https://t.me/addstickers/stpcts")
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(data))
@@ -41,12 +43,12 @@ func handleMessage(ctx context.Context, db *sql.DB, msg *mixin.MessageView) erro
 		fmt.Println("no stickers cmdStr:", cmdStr)
 		cmd := exec.Command("bash", "-c", cmdStr)
 		if err := cmd.Start(); err != nil {
-			fmt.Printf("Failed to start cmd: %v", err)
+			log.Printf("Failed to start cmd: %v", err)
 			return nil
 		}
 
 		if err := cmd.Wait(); err != nil {
-			fmt.Printf("Cmd returned error: %v", err)
+			log.Printf("Cmd returned error: %v", err)
 		}
 
 		fmt.Println("spider done")
@@ -58,40 +60,84 @@ func handleMessage(ctx context.Context, db *sql.DB, msg *mixin.MessageView) erro
 
 	fmt.Println("stickers len:", len(stickers))
 	if stickers != nil && len(stickers) > 0 {
-		var url string
-		for _, sticker := range stickers {
-			url += sticker.Url + "\n"
-		}
-		fmt.Printf("url: %v", url)
-		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(url))
+		return respondSticker(stickers, msg)
 	}
-
-	// file, _ := ioutil.ReadFile(stickers[0].Url)
-	// mixinSticker := MixinSticker{
-	// 	StickerID: "14d15a07-d028-4c4a-ac1c-6a22117c5666",
-	// }
-	// json, _ := json.Marshal(mixinSticker)
-	// return respond(ctx, msg, mixin.MessageCategoryPlainSticker, json)
 
 	return nil
 }
 
-type MixinSticker struct {
-	StickerID string `json:"sticker_id"`
+func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
+	var replies []*mixin.MessageRequest
+	for _, sticker := range stickers {
+		log.Printf("sticker: %v", sticker)
+		mixinStickerID := sticker.MixinStickerID
+		if mixinStickerID == "" {
+			mixinSticker, err := addSticker(sticker)
+			if err != nil {
+				log.Printf("addSticker error: %v", err)
+				continue
+			}
+			success, err := updateMixinStickerID(db, sticker, mixinSticker.StickerID)
+			if err != nil || !success {
+				log.Printf("updateMixinStickerID error: %v, success: %v", err, success)
+				continue
+			}
+			mixinStickerID = mixinSticker.StickerID
+		}
+
+		json, err := json.Marshal(map[string]string{
+			"sticker_id": mixinStickerID,
+		})
+		if err != nil {
+			log.Printf("json marshal error: %v", err)
+			continue
+		}
+
+		payload := base64.StdEncoding.EncodeToString(json)
+		id, _ := uuid.FromString(msg.MessageID)
+		newMessageID := uuid.NewV5(id, "reply"+mixinStickerID).String()
+		reply := &mixin.MessageRequest{
+			ConversationID: msg.ConversationID,
+			RecipientID:    msg.UserID,
+			MessageID:      newMessageID,
+			Category:       mixin.MessageCategoryPlainSticker,
+			Data:           payload,
+		}
+		replies = append(replies, reply)
+	}
+
+	log.Printf("replies len: %v", len(replies))
+	if len(replies) == 0 {
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No sticker found, please make sure the link is valid, or you can contact developer."))
+	}
+	return client.SendMessages(ctx, replies)
 }
 
 func respond(ctx context.Context, msg *mixin.MessageView, category string, data []byte) error {
 	id, _ := uuid.FromString(msg.MessageID)
-	newMessageID := uuid.NewV5(id, "reply"+string(data[:5])).String()
+	newMessageID := uuid.NewV5(id, "reply").String()
 	return sendMessage(ctx, newMessageID, msg.ConversationID, msg.UserID, category, data)
 }
 
 func respondError(ctx context.Context, msg *mixin.MessageView, err error) error {
-	respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(fmt.Sprintln(err)))
+	errString := fmt.Sprintln(err)
+	respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(errString))
 	return nil
 }
 
 func sendMessage(ctx context.Context, messageID, conversationID, recipientID, category string, data []byte) error {
+	payload := base64.StdEncoding.EncodeToString(data)
+	reply := &mixin.MessageRequest{
+		ConversationID: conversationID,
+		RecipientID:    recipientID,
+		MessageID:      messageID,
+		Category:       category,
+		Data:           payload,
+	}
+	return client.SendMessage(ctx, reply)
+}
+
+func sendMessages(ctx context.Context, messageID, conversationID, recipientID, category string, data []byte) error {
 	payload := base64.StdEncoding.EncodeToString(data)
 	reply := &mixin.MessageRequest{
 		ConversationID: conversationID,

@@ -14,6 +14,7 @@ url = "https://tlgrm.eu/stickers?page="
 download_dir = str(os.path.join(Path.home(), "Downloads/tg-stickers/"))
 headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
 
+size = '256'
 
 class BaseModel(Model):
 
@@ -29,6 +30,7 @@ class Sticker(BaseModel):
     album_id = CharField()
     album_name = CharField()
     url = TextField(null=True)
+    mixin_sticker_id = CharField(null=True)
 
     class Meta:
         database = db
@@ -44,8 +46,13 @@ def download_sticker(url, filename):
     if not os.path.exists(dir):
         os.makedirs(dir)
         
-    print('downloading {} to {}'.format(url, local_filename))
-    with requests.get(url, stream=True) as r:
+    if url.endswith('.json'):
+        download_url = url
+    else:
+        split_index= url.rindex('/')
+        download_url = url[:split_index] + '/' + size + '/' + url[split_index + 1:]
+    print('downloading {} to {}'.format(download_url, local_filename))
+    with requests.get(download_url, stream=True) as r:
         r.raise_for_status()
         with open(local_filename, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):

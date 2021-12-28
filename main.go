@@ -15,8 +15,11 @@ import (
 )
 
 var (
-	client *mixin.Client
-	config = flag.String("config", "", "keystore file path")
+	ctx          context.Context
+	client       *mixin.Client
+	config       = flag.String("config", "", "keystore file path")
+	clientSecret = flag.String("clientSecret", "", "client secret")
+	db           *sql.DB
 )
 
 func main() {
@@ -37,7 +40,7 @@ func main() {
 		log.Panicln(err)
 	}
 
-	db, err := sql.Open("mysql", "sticker:sticker@/sticker")
+	db, err = sql.Open("mysql", "sticker:sticker@/sticker")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -52,10 +55,12 @@ func main() {
 			return nil
 		}
 
-		return handleMessage(ctx, db, msg)
+		return handleMessage(msg)
 	}
 
-	ctx := context.Background()
+	ctx = context.Background()
+
+	StartHttpServer()
 
 	for {
 		if err := client.LoopBlaze(ctx, mixin.BlazeListenFunc(h)); err != nil {

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mixin Tutorial</title>
+  <style>
+    ul li {
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body onload="onLoad()">
+  {{if .Signed }}
+  <div>Mixin ID: <strong id="mixin-id"></strong></div>
+  {{else}}
+  <div>You haven't authorize yet.</div>
+  <button onclick="auth()">Authorize</button>
+  {{end}}
+  <script>
+    function auth() {
+      const clientID = "{{.ClientID}}";
+      const url = "https://mixin.one/oauth/authorize?client_id="+clientID+"&scope=PROFILE&response_type=code";
+      window.location.href = url;
+    }
+    async function onLoad() {
+      const mixinIdElm = document.getElementById("mixin-id");
+      if (mixinIdElm) {
+
+        let resp = await fetch('/api/me', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+        const user = await resp.json();
+        mixinIdElm.innerText = user.identity_number;
+      }
+    }
+  </script>
+</body>
+</html>
