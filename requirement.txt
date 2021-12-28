@@ -1,0 +1,8 @@
+schedule
+peewee
+requests
+bs4
+pymysql
+mysqlclient
+flask
+flask-sqlalchemy==2.5.1
