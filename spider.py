@@ -139,7 +139,7 @@ def main(album):
                 break
 
             for a in albums:
-                parse_album(a['href'], soup)
+                parse_album(a['href'])
                 time.sleep(10)
 
     db.close()

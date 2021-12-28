@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -15,7 +14,7 @@ import (
 
 func handleMessage(ctx context.Context, db *sql.DB, msg *mixin.MessageView) error {
 	if msg.Category != mixin.MessageCategoryPlainText {
-		data := fmt.Sprintf("Only support message like 'https://t.me/addstickers/stpcts'")
+		data := fmt.Sprintf("Only support message like https://t.me/addstickers/stpcts")
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(data))
 	}
 
@@ -25,7 +24,7 @@ func handleMessage(ctx context.Context, db *sql.DB, msg *mixin.MessageView) erro
 	}
 
 	if !strings.HasPrefix(string(msgContent), "https://t.me/addstickers/") {
-		data := fmt.Sprintf("Only support message like 'https://t.me/addstickers/stpcts'")
+		data := fmt.Sprintf("Only support message like https://t.me/addstickers/stpcts")
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(data))
 	}
 
@@ -57,24 +56,24 @@ func handleMessage(ctx context.Context, db *sql.DB, msg *mixin.MessageView) erro
 		}
 	}
 
-	fmt.Println("stickers:", stickers)
-	// if stickers != nil && len(stickers) > 0 {
-	// 	var url string
-	// 	for _, sticker := range stickers {
-	// 		url += sticker.Url + "\n"
-	// 	}
-	// 	fmt.Printf("url: %v", url)
-	// 	return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(url))
-	// }
+	fmt.Println("stickers len:", len(stickers))
+	if stickers != nil && len(stickers) > 0 {
+		var url string
+		for _, sticker := range stickers {
+			url += sticker.Url + "\n"
+		}
+		fmt.Printf("url: %v", url)
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(url))
+	}
 
 	// file, _ := ioutil.ReadFile(stickers[0].Url)
-	mixinSticker := MixinSticker{
-		StickerID: "14d15a07-d028-4c4a-ac1c-6a22117c5666",
-	}
-	json, _ := json.Marshal(mixinSticker)
-	return respond(ctx, msg, mixin.MessageCategoryPlainSticker, json)
+	// mixinSticker := MixinSticker{
+	// 	StickerID: "14d15a07-d028-4c4a-ac1c-6a22117c5666",
+	// }
+	// json, _ := json.Marshal(mixinSticker)
+	// return respond(ctx, msg, mixin.MessageCategoryPlainSticker, json)
 
-	// return nil
+	return nil
 }
 
 type MixinSticker struct {
