@@ -1,4 +1,3 @@
-
 import argparse
 import os
 import time
@@ -14,11 +13,15 @@ db = connect('mysql://sticker:sticker@localhost:3306/sticker')
 logging.basicConfig(filename='spider.log', encoding='utf-8', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 parser = argparse.ArgumentParser()
 
-base_url = "https://tlgrm.eu"
-url = "https://tlgrm.eu/stickers?page="
+base_tg_url = "https://tlgrm.eu"
+tg_sticker_url = "https://tlgrm.eu/stickers?page="
+
+wechat_sticker_url = "https://sticker.weixin.qq.com/cgi-bin/mmemoticon-bin/emoticonview?oper=billboard&t=rank"
+wechat_sticker_base = "http://mmbiz.qpic.cn/mmemoticon"
 
 tg_download_dir = str(os.path.join(Path.home(), "Downloads/mixin-sticker/tg-stickers/"))
 lottiefiles_download_dir = str(os.path.join(Path.home(), "Downloads/mixin-sticker/lottiefiles/"))
+wechat_download_dir = str(os.path.join(Path.home(), "Downloads/mixin-sticker/wechat-stickers/"))
 
 headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
 
@@ -74,7 +77,46 @@ def download_sticker(url, dir, filename, size=None):
     return download_url, local_filename
 
 
-def parse_album(url):
+def parse_wechat_album(url):
+    logging.debug('parsing {}'.format(url))
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, 'html.parser')
+
+    head_div = soup.find_all('div', {'class': 'stiker_head_msg'})[0]
+    album_name = head_div.find_all('h2', {'class': 'stiker_head_msg_title'})[0].text
+
+    div = soup.findAll('div', {'class': 'stiker_content'})[0]
+    imgs = div.findAll('img', {'class': 'stiker_content_ele'})
+    for img in imgs:
+        sticker_url = img['src']
+        sticker = Sticker.get_or_none(Sticker.url == sticker_url)
+        if sticker:
+            logging.info('sticker already exists {}'.format(sticker_url))
+            continue
+
+        file_name = sticker_url[len(wechat_sticker_base) + 1:sticker_url.rindex('/')]
+        try:    
+            download_url, local_filename = download_sticker(sticker_url, wechat_download_dir, file_name)
+        except Exception as e:
+            logging.info('no sticker ', e)
+            continue
+
+        sticker = Sticker.create(sticker_id=str(uuid.uuid4()), url=download_url, sticker_name=file_name, album_name=album_name, local_url=local_filename)
+        sticker.save()
+
+
+def parse_wechat_rank(url):
+    logging.debug('parsing {}'.format(url))
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    divs = soup.findAll('div', {'class': 'detail_content'})
+    for div in divs:
+        href = div.findAll('a', {'class': 'title'})[0]['href']
+        logging.debug('parse wechar rank url {}'.format(href))
+        parse_wechat_album(href)
+
+
+def parse_tg_album(url):
     logging.debug('parsing {}'.format(url))
     r = requests.get(url, headers=headers)
     soup = BeautifulSoup(r.text, 'html.parser')
@@ -86,7 +128,7 @@ def parse_album(url):
     is_lottie = True
     for i in range(1, 5000):
         filename = album_id + '/' + str(i)
-        base_sticker_url = base_url + content[:content.rindex('/')] + '/' + str(i)
+        base_sticker_url = base_tg_url + content[:content.rindex('/')] + '/' + str(i)
         if is_lottie:
             postfix = '.json'
         else:
@@ -164,7 +206,7 @@ def route_args(args):
     if url and url.endswith('.json'):
         parse_json_url(url)
     elif args.album:
-        parse_album(base_url + '/stickers/' + args.album)
+        parse_tg_album(base_tg_url + '/stickers/' + args.album)
     elif args.tg:    
         for i in range(1, 1000):
             page_url = url + str(i)
@@ -178,8 +220,10 @@ def route_args(args):
                 break
 
             for a in albums:
-                parse_album(a['href'])
+                parse_tg_album(a['href'])
                 time.sleep(10)
+    elif args.wechat:
+        parse_wechat_rank(wechat_sticker_url)
     else:
         parser.print_help()
 
@@ -191,6 +235,7 @@ def main():
     parser.add_argument('--url', type=str, help='lottie json url, e.g., https://assets9.lottiefiles.com/packages/lf20_muiaursk.json')
     parser.add_argument('--album', type=str, help='Telegram sticker album name, e.g., stpcts')
     parser.add_argument('--tg', type=bool, default=False, help='Spider Telegram stickers from https://tlgrm.eu')
+    parser.add_argument('--wechat', type=bool, default=False, help='Spider WeChat stickers from https://sticker.weixin.qq.com/cgi-bin/mmemoticon-bin/emoticonview?oper=billboard&t=rank')
     args = parser.parse_args()
 
     route_args(args)
