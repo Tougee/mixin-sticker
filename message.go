@@ -6,18 +6,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os/exec"
+	"math/rand"
 	"strings"
 
 	"github.com/fox-one/mixin-sdk-go"
 	"github.com/gofrs/uuid"
 )
 
+var supported_hint = `Currently supported types:
+	1. Telegram sticker album link, e.g., https://t.me/addstickers/stpcts
+	2. Directly lottie file link, e.g., https://assets9.lottiefiles.com/packages/lf20_muiaursk.json
+`
+
 func handleMessage(msg *mixin.MessageView) error {
-	log.Printf("handle message ID: %s", msg.MessageID)
 	if msg.Category != mixin.MessageCategoryPlainText {
-		data := fmt.Sprintf("Only support message like https://t.me/addstickers/stpcts")
-		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(data))
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(supported_hint))
 	}
 
 	msgContent, err := base64.StdEncoding.DecodeString(msg.Data)
@@ -25,12 +28,99 @@ func handleMessage(msg *mixin.MessageView) error {
 		return err
 	}
 
-	if !strings.HasPrefix(string(msgContent), "https://t.me/addstickers/") {
-		data := fmt.Sprintf("Only support message like https://t.me/addstickers/stpcts")
-		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(data))
+	content := string(msgContent)
+
+	if content == "clear-albums" && msg.UserID == AdminUserID {
+		err = clearPersonalStickers()
+		if err != nil {
+			return respondError(ctx, msg, err)
+		} else {
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("clear success"))
+		}
+	} else if content == "check-albums" && msg.UserID == AdminUserID {
+		count, err := checkPersonalStickers()
+		if err != nil {
+			return respondError(ctx, msg, err)
+		} else {
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(fmt.Sprintf("Current personal sticker count %v", count)))
+		}
 	}
 
-	albumName := strings.TrimPrefix(string(msgContent), "https://t.me/addstickers/")
+	tgAlbumLink := strings.HasPrefix(content, "https://t.me/addstickers/")
+	lottieLink := strings.HasSuffix(content, ".json")
+	if !tgAlbumLink && !lottieLink {
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(supported_hint))
+	}
+
+	if tgAlbumLink {
+		return handleTgAlbum(content, msg)
+	} else if lottieLink {
+		return handleLottie(content, msg)
+	}
+
+	return nil
+}
+
+func handleLottie(content string, msg *mixin.MessageView) error {
+	sticker, err := findByUrl(db, content)
+	if err != nil {
+		log.Printf("findByUrl error: %v", err)
+	}
+
+	var respondErrorMsg string
+	if sticker == nil {
+		respondErrorMsg = fmt.Sprintf("No cache founded, fetching from %v, please wait...", content)
+		respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+
+		cmdStr := fmt.Sprintf("python3 spider.py --url=%v", content)
+		err = callSpider(cmdStr)
+		if err != nil {
+			respondErrorMsg = "Failed to fetch lottie file, please try again later."
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+		}
+
+		fmt.Println("spider done")
+		sticker, err = findByUrl(db, content)
+		if err != nil || sticker == nil {
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+		}
+	}
+
+	log.Printf("sticker: %v", sticker)
+	mixinStickerID := sticker.MixinStickerID
+	if mixinStickerID == "" {
+		mixinSticker, err := addSticker(*sticker)
+		if err != nil {
+			log.Printf("addSticker error: %v", err)
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+		}
+		success, err := updateMixinStickerID(db, sticker.StickerID, mixinSticker.StickerID)
+		if err != nil || !success {
+			log.Printf("updateMixinStickerID error: %v, success: %v", err, success)
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+		}
+		mixinStickerID = mixinSticker.StickerID
+	}
+	if mixinStickerID == "" {
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+	}
+
+	removeStickers(mixinStickerID)
+
+	json, err := json.Marshal(map[string]string{
+		"sticker_id": mixinStickerID,
+	})
+	if err != nil {
+		log.Printf("json marshal error: %v", err)
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+	}
+
+	payload := base64.StdEncoding.EncodeToString(json)
+	return respond(ctx, msg, mixin.MessageCategoryPlainSticker, []byte(payload))
+}
+
+func handleTgAlbum(content string, msg *mixin.MessageView) error {
+	albumName := strings.TrimPrefix(content, "https://t.me/addstickers/")
 	stickers, err := findByAlbumName(db, albumName)
 	if err != nil {
 		return err
@@ -40,15 +130,9 @@ func handleMessage(msg *mixin.MessageView) error {
 		respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No cache founded, fetching from telegram, please wait..."))
 
 		cmdStr := fmt.Sprintf("python3 spider.py --album=%v", albumName)
-		fmt.Println("no stickers cmdStr:", cmdStr)
-		cmd := exec.Command("bash", "-c", cmdStr)
-		if err := cmd.Start(); err != nil {
-			log.Printf("Failed to start cmd: %v", err)
-			return nil
-		}
-
-		if err := cmd.Wait(); err != nil {
-			log.Printf("Cmd returned error: %v", err)
+		err = callSpider(cmdStr)
+		if err != nil {
+			return err
 		}
 
 		fmt.Println("spider done")
@@ -68,6 +152,7 @@ func handleMessage(msg *mixin.MessageView) error {
 
 func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 	var replies []*mixin.MessageRequest
+	var clearIds []string
 	for _, sticker := range stickers {
 		log.Printf("sticker: %v", sticker)
 		mixinStickerID := sticker.MixinStickerID
@@ -77,13 +162,15 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 				log.Printf("addSticker error: %v", err)
 				continue
 			}
-			success, err := updateMixinStickerID(db, sticker, mixinSticker.StickerID)
+			success, err := updateMixinStickerID(db, sticker.StickerID, mixinSticker.StickerID)
 			if err != nil || !success {
 				log.Printf("updateMixinStickerID error: %v, success: %v", err, success)
 				continue
 			}
 			mixinStickerID = mixinSticker.StickerID
 		}
+
+		clearIds = append(clearIds, mixinStickerID)
 
 		json, err := json.Marshal(map[string]string{
 			"sticker_id": mixinStickerID,
@@ -106,6 +193,8 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 		replies = append(replies, reply)
 	}
 
+	removeStickers(clearIds...)
+
 	log.Printf("replies len: %v", len(replies))
 	if len(replies) == 0 {
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No sticker found, please make sure the link is valid, or you can contact developer."))
@@ -115,7 +204,7 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 
 func respond(ctx context.Context, msg *mixin.MessageView, category string, data []byte) error {
 	id, _ := uuid.FromString(msg.MessageID)
-	newMessageID := uuid.NewV5(id, "reply").String()
+	newMessageID := uuid.NewV5(id, fmt.Sprintf("reply %v", rand.Intn(100))).String()
 	return sendMessage(ctx, newMessageID, msg.ConversationID, msg.UserID, category, data)
 }
 

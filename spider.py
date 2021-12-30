@@ -7,14 +7,22 @@ from playhouse.db_url import connect
 import requests
 from bs4 import BeautifulSoup
 from pathlib import Path
+import uuid
+import logging
 
 db = connect('mysql://sticker:sticker@localhost:3306/sticker')
+logging.basicConfig(filename='spider.log', encoding='utf-8', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
+parser = argparse.ArgumentParser()
+
 base_url = "https://tlgrm.eu"
 url = "https://tlgrm.eu/stickers?page="
-download_dir = str(os.path.join(Path.home(), "Downloads/tg-stickers/"))
+
+tg_download_dir = str(os.path.join(Path.home(), "Downloads/mixin-sticker/tg-stickers/"))
+lottiefiles_download_dir = str(os.path.join(Path.home(), "Downloads/mixin-sticker/lottiefiles/"))
+
 headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
 
-size = '256'
+tg_sticker_size = '192'
 
 class BaseModel(Model):
 
@@ -26,22 +34,20 @@ class BaseModel(Model):
 
 
 class Sticker(BaseModel):
-    sticker_name = CharField()
-    album_id = CharField()
-    album_name = CharField()
-    url = TextField(null=True)
+    sticker_id = CharField(primary_key=True)
+    url = CharField(unique=True, max_length=2048)
+    sticker_name = CharField(null=True)
+    album_id = CharField(null=True)
+    album_name = CharField(null=True)
+    local_url = CharField(null=True, max_length=2048)
     mixin_sticker_id = CharField(null=True)
 
     class Meta:
         database = db
-        primary_key = CompositeKey('sticker_name', 'album_id')
 
 
-def download_sticker(url, filename):
-    local_filename = download_dir + filename
-    if os.path.exists(local_filename) and os.path.getsize(local_filename) > 0:
-        return local_filename
-
+def download_sticker(url, dir, filename, size=None):
+    local_filename = dir + filename
     dir = local_filename[:local_filename.rindex('/')]
     if not os.path.exists(dir):
         os.makedirs(dir)
@@ -50,18 +56,26 @@ def download_sticker(url, filename):
         download_url = url
     else:
         split_index= url.rindex('/')
-        download_url = url[:split_index] + '/' + size + '/' + url[split_index + 1:]
-    print('downloading {} to {}'.format(download_url, local_filename))
+        if size:
+            download_url = url[:split_index] + '/' + size + '/' + url[split_index + 1:]
+        else:
+            download_url = url[:split_index] + '/' + url[split_index + 1:]
+
+    if os.path.exists(local_filename) and os.path.getsize(local_filename) > 0:
+        return download_url, local_filename
+
+    logging.debug('downloading {} to {}'.format(download_url, local_filename))
     with requests.get(download_url, stream=True) as r:
         r.raise_for_status()
         with open(local_filename, 'wb') as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-    return local_filename
+
+    return download_url, local_filename
 
 
 def parse_album(url):
-    print('parsing {}'.format(url))
+    logging.debug('parsing {}'.format(url))
     r = requests.get(url, headers=headers)
     soup = BeautifulSoup(r.text, 'html.parser')
     image_meta = soup.find_all('meta', property='og:image')
@@ -76,84 +90,113 @@ def parse_album(url):
         if is_lottie:
             postfix = '.json'
         else:
-            postfix = '.webp'
+            postfix = '.png'
         sticker_url = base_sticker_url + postfix
-        print('parsing sticker_url {}'.format(sticker_url))
+        logging.debug('parsing sticker_url {}'.format(sticker_url))
 
         try:
-            local_filename = download_sticker(sticker_url, filename + postfix)
+            download_url, local_filename = download_sticker(sticker_url, tg_download_dir, filename + postfix, tg_sticker_size)
         except requests.exceptions.HTTPError as e:
-            local_filename = download_dir + filename
+            local_filename = tg_download_dir + filename
             if os.path.exists(local_filename):
                 os.remove(local_filename)
 
             if e.response.status_code == 404:
                 if is_lottie:
                     is_lottie = False
-                    postfix = '.webp'
+                    postfix = '.png'
                     sticker_url = base_sticker_url + postfix
-                    print('parsing sticker_url {}'.format(sticker_url))
+                    logging.debug('parsing sticker_url {}'.format(sticker_url))
                     try:
-                        local_filename = download_sticker(sticker_url, filename + postfix)
+                        download_url, local_filename = download_sticker(sticker_url, tg_download_dir, filename + postfix, tg_sticker_size)
                     except Exception as e:
-                        local_filename = download_dir + filename
+                        local_filename = tg_download_dir + filename
                         if os.path.exists(local_filename):
                             os.remove(local_filename)
 
                         if e.response.status_code == 404:
-                            print('no sticker {}'.format(sticker_url))
+                            logging.info('no sticker {}'.format(sticker_url))
                             break
                 else:
-                    print('no sticker {}'.format(sticker_url))
+                    logging.info('no sticker {}'.format(sticker_url))
                     break
             else:
-                print('no sticker {}'.format(sticker_url))
+                logging.info('no sticker {}'.format(sticker_url))
                 break
         
         sticker_name = str(i) + postfix
         try:
-            sticker = Sticker.get(Sticker.sticker_name == sticker_name, Sticker.album_id == album_id)
+            sticker = Sticker.get_or_none(Sticker.sticker_name == sticker_name, Sticker.album_id == album_id)
         except Sticker.DoesNotExist:
-            print('sticker {} does not exists'.format(album_id + '/' + sticker_name))
-            sticker = Sticker.create(sticker_name=sticker_name, album_id=album_id, album_name=album_name, url=local_filename)
+            logging.debug('sticker {} does not exists'.format(album_id + '/' + sticker_name))
+            sticker = Sticker.create(sticker_id=str(uuid.uuid4()), url=download_url, sticker_name=sticker_name, album_id=album_id, album_name=album_name, local_url=local_filename)
             sticker.save()
             continue
 
         if sticker:
-            print('sticker {} already exists'.format(album_id + '/' + sticker_name))
+            logging.debug('sticker {} already exists'.format(album_id + '/' + sticker_name))
             continue
 
-        sticker = Sticker.create(sticker_name=sticker_name, album_id=album_id, album_name=album_name, url=local_filename)
+        sticker = Sticker.create(sticker_id=str(uuid.uuid4()), url=download_url, sticker_name=sticker_name, album_id=album_id, album_name=album_name, local_url=local_filename)
         sticker.save()
 
 
-def main(album):
-    db.connect()
-    db.create_tables([Sticker])
+def parse_json_url(url):
+    sticker = Sticker.get_or_none(Sticker.url == url)
+    if sticker:
+        logging.info('sticker already exists {}'.format(url))
+        return
 
-    if album:
-        parse_album(base_url + '/stickers/' + album)
-    else:    
+    file_name = url[url.rindex('/') + 1:]
+    try:
+        download_url, local_filename = download_sticker(url, lottiefiles_download_dir, file_name)
+    except Exception as e:
+        logging.info('no sticker ', e)
+        return
+
+    sticker = Sticker.create(sticker_id=str(uuid.uuid4()), url=download_url, sticker_name=file_name, local_url=local_filename)
+    sticker.save()
+
+
+def route_args(args):
+    url = args.url
+
+    if url and url.endswith('.json'):
+        parse_json_url(url)
+    elif args.album:
+        parse_album(base_url + '/stickers/' + args.album)
+    elif args.tg:    
         for i in range(1, 1000):
             page_url = url + str(i)
             r = requests.get(page_url, headers=headers)
-            print('spidering {}'.format(page_url))
+            logging.debug('spidering {}'.format(page_url))
             soup = BeautifulSoup(r.text, 'html.parser')
             albums = soup.select('.stickerbox')
-            print('albums found {}'.format(len(albums)))
+            logging.debug('albums found {}'.format(len(albums)))
             if len(albums) == 0:
-                print('no new page')
+                logging.info('no new page')
                 break
 
             for a in albums:
                 parse_album(a['href'])
                 time.sleep(10)
+    else:
+        parser.print_help()
+
+
+def main():
+    db.connect()
+    db.create_tables([Sticker])
+
+    parser.add_argument('--url', type=str, help='lottie json url, e.g., https://assets9.lottiefiles.com/packages/lf20_muiaursk.json')
+    parser.add_argument('--album', type=str, help='Telegram sticker album name, e.g., stpcts')
+    parser.add_argument('--tg', type=bool, default=False, help='Spider Telegram stickers from https://tlgrm.eu')
+    args = parser.parse_args()
+
+    route_args(args)
 
     db.close()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--album', type=str)
-    args = parser.parse_args()
-    main(args.album)
+    main()

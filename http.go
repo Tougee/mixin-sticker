@@ -22,6 +22,13 @@ var (
 	loading     bool
 )
 
+const (
+	TooManyStickers = 20126
+
+	BotPersonalAlbumID = "1a472cbb-3c55-497a-bec4-d8be0d9af502"
+	AdminUserID        = "d3bee23a-81d4-462e-902a-22dae9ef89ff"
+)
+
 func StartHttpServer() {
 	{
 		mux := chi.NewMux()
@@ -57,7 +64,7 @@ func renderIndexPage(w http.ResponseWriter, r *http.Request) {
 
 func addSticker(sticker Sticker) (*MixinSticker, error) {
 	log.Printf("addSticker: %+v", sticker)
-	data, err := ioutil.ReadFile(sticker.Url)
+	data, err := ioutil.ReadFile(sticker.LocalUrl)
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +74,47 @@ func addSticker(sticker Sticker) (*MixinSticker, error) {
 	}
 	var mixinSticker MixinSticker
 	if err = client.Post(ctx, "/stickers/favorite/add", paras, &mixinSticker); err != nil {
+		switch {
+		case mixin.IsErrorCodes(err, TooManyStickers):
+			log.Println("Too many stickers")
+			clearPersonalStickers()
+		default:
+		}
 		return nil, err
 	}
 
 	return &mixinSticker, nil
+}
+
+func checkPersonalStickers() (int, error) {
+	var stickers []MixinSticker
+	if err := client.Get(ctx, fmt.Sprintf("/stickers/albums/%s", BotPersonalAlbumID), nil, &stickers); err != nil {
+		return -1, err
+	}
+	return len(stickers), nil
+}
+
+func clearPersonalStickers() error {
+	var albums []MixinAlbum
+	if err := client.Get(ctx, "/stickers/albums", nil, &albums); err != nil {
+		return err
+	}
+	var albumId string
+	for _, album := range albums {
+		if album.Category == "PERSONAL" {
+			albumId = album.AlbumID
+		}
+	}
+
+	var stickers []MixinSticker
+	if err := client.Get(ctx, fmt.Sprintf("/stickers/albums/%s", albumId), nil, &stickers); err != nil {
+		return err
+	}
+	var ids []string
+	for _, sticker := range stickers {
+		ids = append(ids, sticker.StickerID)
+	}
+	return removeStickers(ids...)
 }
 
 func removeStickers(ids ...string) error {
@@ -142,4 +186,15 @@ type MixinSticker struct {
 	AssetWidth  int       `json:"asset_width"`
 	AssetHeight int       `json:"asset_height"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type MixinAlbum struct {
+	AlbumID     string    `json:"album_id"`
+	Name        string    `json:"name"`
+	IconUrl     string    `json:"icon_url"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	UserID      string    `json:"user_id"`
+	Category    string    `json:"category"`
+	Description string    `json:"description"`
 }
