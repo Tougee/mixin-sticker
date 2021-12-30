@@ -86,7 +86,6 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 		}
 	}
 
-	log.Printf("sticker: %v", sticker)
 	mixinStickerID := sticker.MixinStickerID
 	if mixinStickerID == "" {
 		mixinSticker, err := addSticker(*sticker)
@@ -105,7 +104,10 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 	}
 
-	removeStickers(mixinStickerID)
+	err = removeStickers(mixinStickerID)
+	if err != nil {
+		log.Printf("removeStickers error: %v", err)
+	}
 
 	json, err := json.Marshal(map[string]string{
 		"sticker_id": mixinStickerID,
@@ -116,7 +118,16 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 	}
 
 	payload := base64.StdEncoding.EncodeToString(json)
-	return respond(ctx, msg, mixin.MessageCategoryPlainSticker, []byte(payload))
+	id, _ := uuid.FromString(msg.MessageID)
+	newMessageID := uuid.NewV5(id, "reply"+mixinStickerID).String()
+	reply := &mixin.MessageRequest{
+		ConversationID: msg.ConversationID,
+		RecipientID:    msg.UserID,
+		MessageID:      newMessageID,
+		Category:       mixin.MessageCategoryPlainSticker,
+		Data:           payload,
+	}
+	return client.SendMessage(ctx, reply)
 }
 
 func handleTgAlbum(content string, msg *mixin.MessageView) error {
@@ -193,7 +204,10 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 		replies = append(replies, reply)
 	}
 
-	removeStickers(clearIds...)
+	err := removeStickers(clearIds...)
+	if err != nil {
+		log.Printf("removeStickers error: %v", err)
+	}
 
 	log.Printf("replies len: %v", len(replies))
 	if len(replies) == 0 {
