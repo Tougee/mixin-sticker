@@ -10,8 +10,8 @@ import uuid
 import logging
 
 db = connect('mysql://sticker:sticker@localhost:3306/sticker')
-logging.basicConfig(filename='spider.log', encoding='utf-8', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
-parser = argparse.ArgumentParser()
+logging.basicConfig(filename='spider.log', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
+parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
 
 base_tg_url = "https://tlgrm.eu"
 tg_sticker_url = "https://tlgrm.eu/stickers?page="
@@ -207,9 +207,9 @@ def route_args(args):
         parse_json_url(url)
     elif args.album:
         parse_tg_album(base_tg_url + '/stickers/' + args.album)
-    elif args.tg:    
+    elif args.crawl == 'tg':   
         for i in range(1, 1000):
-            page_url = url + str(i)
+            page_url = tg_sticker_url + str(i)
             r = requests.get(page_url, headers=headers)
             logging.debug('spidering {}'.format(page_url))
             soup = BeautifulSoup(r.text, 'html.parser')
@@ -222,7 +222,7 @@ def route_args(args):
             for a in albums:
                 parse_tg_album(a['href'])
                 time.sleep(10)
-    elif args.wechat:
+    elif args.crawl == 'wechat':
         parse_wechat_rank(wechat_sticker_url)
     else:
         parser.print_help()
@@ -234,8 +234,13 @@ def main():
 
     parser.add_argument('--url', type=str, help='lottie json url, e.g., https://assets9.lottiefiles.com/packages/lf20_muiaursk.json')
     parser.add_argument('--album', type=str, help='Telegram sticker album name, e.g., stpcts')
-    parser.add_argument('--tg', type=bool, default=False, help='Spider Telegram stickers from https://tlgrm.eu')
-    parser.add_argument('--wechat', type=bool, default=False, help='Spider WeChat stickers from https://sticker.weixin.qq.com/cgi-bin/mmemoticon-bin/emoticonview?oper=billboard&t=rank')
+
+    crawl_options = ['tg', 'wechat']
+    parser.add_argument('--crawl', choices=crawl_options, 
+    help='''support 2 options:
+[tg] for spider Telegram stickers from https://tlgrm.eu
+[wechat] for spider WeChat stickers from https://sticker.weixin.qq.com/cgi-bin/mmemoticon-bin/emoticonview?oper=billboard&t=rank
+    ''')
     args = parser.parse_args()
 
     route_args(args)

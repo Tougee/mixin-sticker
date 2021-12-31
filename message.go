@@ -153,7 +153,7 @@ func handleTgAlbum(content string, msg *mixin.MessageView) error {
 		}
 	}
 
-	fmt.Println("stickers len:", len(stickers))
+	fmt.Println("tg album stickers len:", len(stickers))
 	if stickers != nil && len(stickers) > 0 {
 		return respondSticker(stickers, msg)
 	}
@@ -165,7 +165,6 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 	var replies []*mixin.MessageRequest
 	var clearIds []string
 	for _, sticker := range stickers {
-		log.Printf("sticker: %v", sticker)
 		mixinStickerID := sticker.MixinStickerID
 		if mixinStickerID == "" {
 			mixinSticker, err := addSticker(sticker)
