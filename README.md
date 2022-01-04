@@ -2,6 +2,7 @@
 
 ## mixin sticker bot
 
+Searching for `7000101600` in [Mixin Messenger](https://mixin.one/messenger) and start using.
 
 
 ## spider
