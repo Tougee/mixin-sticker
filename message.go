@@ -72,7 +72,7 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 		respondErrorMsg = fmt.Sprintf("No cache founded, fetching from %v, please wait...", content)
 		respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 
-		cmdStr := fmt.Sprintf("python3 spider.py --url=%v", content)
+		cmdStr := fmt.Sprintf("/usr/bin/python3 spider.py --url=%v", content)
 		err = callSpider(cmdStr)
 		if err != nil {
 			respondErrorMsg = "Failed to fetch lottie file, please try again later."
@@ -133,32 +133,35 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 func handleTgAlbum(content string, msg *mixin.MessageView) error {
 	albumName := strings.TrimPrefix(content, "https://t.me/addstickers/")
 	stickers, err := findByAlbumName(db, albumName)
+	var respondErrorMsg string
 	if err != nil {
-		return err
+		log.Printf("findByAlbumName error: %v", err)
 	}
 
 	if stickers == nil || len(stickers) == 0 {
-		respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No cache founded, fetching from telegram, please wait..."))
+		respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No cache founded, fetching from Telegram, please wait..."))
 
-		cmdStr := fmt.Sprintf("python3 spider.py --album=%v", albumName)
+		cmdStr := fmt.Sprintf("/usr/bin/python3 spider.py --album=%v", albumName)
 		err = callSpider(cmdStr)
 		if err != nil {
-			return err
+			respondErrorMsg = "Failed to fetch from Telegram, please try again later."
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 		}
 
 		fmt.Println("spider done")
 		stickers, err = findByAlbumName(db, albumName)
 		if err != nil {
-			return err
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 		}
 	}
 
 	fmt.Println("tg album stickers len:", len(stickers))
 	if stickers != nil && len(stickers) > 0 {
 		return respondSticker(stickers, msg)
+	} else {
+		respondErrorMsg = "Valid stickers not found from Telegram, please try again later or contact developer."
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 	}
-
-	return nil
 }
 
 func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
