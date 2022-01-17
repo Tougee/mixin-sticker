@@ -215,7 +215,16 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 	if len(replies) == 0 {
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No sticker found, please make sure the link is valid, or you can contact developer."))
 	}
-	return client.SendMessages(ctx, replies)
+
+	chunkSize := 10
+	for i := 0; i < len(replies); i += chunkSize {
+		end := i + chunkSize
+		if end > len(replies) {
+			end = len(replies)
+		}
+		client.SendMessages(ctx, replies[i:end])
+	}
+	return nil
 }
 
 func respond(ctx context.Context, msg *mixin.MessageView, category string, data []byte) error {
