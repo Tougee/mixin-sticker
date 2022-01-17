@@ -27,6 +27,9 @@ func addSticker(sticker Sticker) (*MixinSticker, error) {
 		case mixin.IsErrorCodes(err, TooManyStickers):
 			log.Println("Too many stickers")
 			clearPersonalStickers()
+		case mixin.IsErrorCodes(err, BadData):
+			clearPersonalStickers()
+			return nil, fmt.Errorf("bad data")
 		default:
 		}
 		return nil, err

@@ -21,6 +21,7 @@ var (
 
 const (
 	TooManyStickers = 20126
+	BadData         = 10002
 
 	BotPersonalAlbumID = "1a472cbb-3c55-497a-bec4-d8be0d9af502"
 	AdminUserID        = "d3bee23a-81d4-462e-902a-22dae9ef89ff"
