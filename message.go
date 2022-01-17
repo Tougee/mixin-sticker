@@ -14,8 +14,8 @@ import (
 )
 
 var supported_hint = `Currently supported types:
-	1. Telegram sticker album link, e.g., https://t.me/addstickers/stpcts
-	2. Directly lottie file link, e.g., https://assets9.lottiefiles.com/packages/lf20_muiaursk.json
+	1. Telegram sticker album share link, e.g., https://t.me/addstickers/stpcts
+	2. Telegram web link, e.g., https://tlgrm.eu/stickers/stpcts
 `
 
 func handleMessage(msg *mixin.MessageView) error {
@@ -46,7 +46,7 @@ func handleMessage(msg *mixin.MessageView) error {
 		}
 	}
 
-	tgAlbumLink := strings.HasPrefix(content, "https://t.me/addstickers/")
+	tgAlbumLink := strings.HasPrefix(content, "https://t.me/addstickers/") || strings.HasPrefix(content, "https://tlgrm.eu/stickers/")
 	lottieLink := strings.HasSuffix(content, ".json")
 	if !tgAlbumLink && !lottieLink {
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(supported_hint))
@@ -131,7 +131,12 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 }
 
 func handleTgAlbum(content string, msg *mixin.MessageView) error {
-	albumName := strings.TrimPrefix(content, "https://t.me/addstickers/")
+	var albumName string
+	if strings.HasPrefix(content, "https://t.me/addstickers/") {
+		albumName = strings.TrimPrefix(content, "https://t.me/addstickers/")
+	} else {
+		albumName = strings.TrimPrefix(content, "https://tlgrm.eu/stickers/")
+	}
 	stickers, err := findByAlbumName(db, albumName)
 	var respondErrorMsg string
 	if err != nil {
