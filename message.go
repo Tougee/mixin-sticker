@@ -13,7 +13,7 @@ import (
 	"github.com/gofrs/uuid"
 )
 
-var supported_hint = `Currently supported types:
+var supported_hint = `Send me link like:
 	1. Telegram sticker album share link, e.g., https://t.me/addstickers/stpcts
 	2. Telegram web link, e.g., https://tlgrm.eu/stickers/stpcts
 `
@@ -76,12 +76,15 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 		err = callSpider(cmdStr)
 		if err != nil {
 			respondErrorMsg = "Failed to fetch lottie file, please try again later."
+			log.Println(respondErrorMsg)
 			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 		}
 
 		fmt.Println("spider done")
 		sticker, err = findByUrl(db, content)
 		if err != nil || sticker == nil {
+			respondErrorMsg = "Valid lottie file not found, please try again later or contact developer."
+			log.Println(respondErrorMsg)
 			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 		}
 	}
@@ -90,12 +93,14 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 	if mixinStickerID == "" {
 		mixinSticker, err := addSticker(*sticker)
 		if err != nil {
-			log.Printf("addSticker error: %v", err)
+			respondErrorMsg = fmt.Sprintf("addSticker error: %v", err)
+			log.Println(respondErrorMsg)
 			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 		}
 		success, err := updateMixinStickerID(db, sticker.StickerID, mixinSticker.StickerID)
 		if err != nil || !success {
-			log.Printf("updateMixinStickerID error: %v, success: %v", err, success)
+			respondErrorMsg = fmt.Sprintf("updateMixinStickerID error: %v, success: %v", err, success)
+			log.Println(respondErrorMsg)
 			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 		}
 		mixinStickerID = mixinSticker.StickerID
@@ -113,7 +118,8 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 		"sticker_id": mixinStickerID,
 	})
 	if err != nil {
-		log.Printf("json marshal error: %v", err)
+		respondErrorMsg = fmt.Sprintf("json marshal error: %v", err)
+		log.Println(respondErrorMsg)
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 	}
 
@@ -156,6 +162,7 @@ func handleTgAlbum(content string, msg *mixin.MessageView) error {
 		fmt.Println("spider done")
 		stickers, err = findByAlbumName(db, albumName)
 		if err != nil {
+			respondErrorMsg = "Valid album not found, please try again later or contact developer."
 			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
 		}
 	}
