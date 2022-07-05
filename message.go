@@ -37,8 +37,10 @@ func handleMessage(msg *mixin.MessageView) error {
 		if strings.HasSuffix(dataMessage.Name, "tgs") {
 			err = handleTgs(&dataMessage, msg)
 		} else if strings.HasSuffix(dataMessage.Name, "zip") {
-			respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(fmt.Sprintf("try analysis %s", dataMessage.Name)))
-			err = handleTgsZip(&dataMessage, msg)
+			respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(fmt.Sprintf("try analysis %s, please wait...", dataMessage.Name)))
+			go func(d *mixin.DataMessage, cid, mid, uid string) {
+				handleTgsZip(d, cid, mid, uid)
+			}(&dataMessage, msg.ConversationID, msg.MessageID, msg.UserID)
 		}
 		if err != nil {
 			respondErrorMsg := fmt.Sprintf("add sticker error: %v", err)
@@ -88,7 +90,7 @@ func handleMessage(msg *mixin.MessageView) error {
 	return nil
 }
 
-func handleTgsZip(data *mixin.DataMessage, msg *mixin.MessageView) error {
+func handleTgsZip(data *mixin.DataMessage, cid, mid, uid string) error {
 	fileName := strings.TrimSuffix(data.Name, filepath.Ext(data.Name))
 	zipFile, err := downloadAttachment(data, fmt.Sprintf("/tmp/%s.zip", fileName))
 	if err != nil {
@@ -115,7 +117,7 @@ func handleTgsZip(data *mixin.DataMessage, msg *mixin.MessageView) error {
 			continue
 		}
 
-		mixinSticker, json, err := handleTgsFile(f, fn, msg)
+		mixinSticker, json, err := handleTgsFile(f, fn)
 		if err != nil {
 			return err
 		}
@@ -123,11 +125,11 @@ func handleTgsZip(data *mixin.DataMessage, msg *mixin.MessageView) error {
 		clearIds = append(clearIds, mixinSticker.StickerID)
 
 		payload := base64.StdEncoding.EncodeToString(json)
-		id, _ := uuid.FromString(msg.MessageID)
+		id, _ := uuid.FromString(mid)
 		newMessageID := uuid.NewV5(id, "reply"+mixinSticker.StickerID).String()
 		reply := &mixin.MessageRequest{
-			ConversationID: msg.ConversationID,
-			RecipientID:    msg.UserID,
+			ConversationID: cid,
+			RecipientID:    uid,
 			MessageID:      newMessageID,
 			Category:       mixin.MessageCategoryPlainSticker,
 			Data:           payload,
@@ -142,7 +144,7 @@ func handleTgsZip(data *mixin.DataMessage, msg *mixin.MessageView) error {
 
 	log.Printf("replies len: %v", len(replies))
 	if len(replies) == 0 {
-		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No sticker found"))
+		return nil
 	}
 
 	chunkSize := 10
@@ -151,7 +153,10 @@ func handleTgsZip(data *mixin.DataMessage, msg *mixin.MessageView) error {
 		if end > len(replies) {
 			end = len(replies)
 		}
-		client.SendMessages(ctx, replies[i:end])
+		err = client.SendMessages(ctx, replies[i:end])
+		if err != nil {
+			log.Println(err)
+		}
 	}
 	return nil
 }
@@ -164,7 +169,7 @@ func handleTgs(data *mixin.DataMessage, msg *mixin.MessageView) error {
 	}
 	defer os.Remove(file.Name())
 
-	mixinSticker, json, err := handleTgsFile(file, fileName, msg)
+	mixinSticker, json, err := handleTgsFile(file, fileName)
 	if err != nil {
 		return err
 	}
@@ -211,7 +216,7 @@ func downloadAttachment(data *mixin.DataMessage, fileName string) (*os.File, err
 	return file, err
 }
 
-func handleTgsFile(file *os.File, fileName string, msg *mixin.MessageView) (*MixinSticker, []byte, error) {
+func handleTgsFile(file *os.File, fileName string) (*MixinSticker, []byte, error) {
 	unzipFile, err := os.Create(fmt.Sprintf("%s.json", fileName))
 	if err != nil {
 		return nil, nil, err
@@ -242,9 +247,7 @@ func handleTgsFile(file *os.File, fileName string, msg *mixin.MessageView) (*Mix
 		"sticker_id": mixinSticker.StickerID,
 	})
 	if err != nil {
-		respondErrorMsg := fmt.Sprintf("json marshal error: %v", err)
-		log.Println(respondErrorMsg)
-		return nil, nil, respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+		return nil, nil, err
 	}
 
 	return mixinSticker, json, nil
