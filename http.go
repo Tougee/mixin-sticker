@@ -11,9 +11,9 @@ import (
 	"github.com/fox-one/mixin-sdk-go"
 )
 
-func addSticker(sticker Sticker) (*MixinSticker, error) {
-	log.Printf("addSticker: %+v", sticker)
-	data, err := ioutil.ReadFile(sticker.LocalUrl)
+func addSticker(localUrl string) (*MixinSticker, error) {
+	log.Printf("addSticker: %s", localUrl)
+	data, err := ioutil.ReadFile(localUrl)
 	if err != nil {
 		return nil, err
 	}

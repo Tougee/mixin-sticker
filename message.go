@@ -5,8 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fox-one/mixin-sdk-go"
@@ -19,7 +23,30 @@ var supported_hint = `Send me link like:
 `
 
 func handleMessage(msg *mixin.MessageView) error {
-	if msg.Category != mixin.MessageCategoryPlainText {
+	if msg.Category == mixin.MessageCategoryPlainData {
+		data, err := base64.StdEncoding.DecodeString(msg.Data)
+		if err != nil {
+			return err
+		}
+		dataMessage := mixin.DataMessage{}
+		err = json.Unmarshal(data, &dataMessage)
+		if err != nil {
+			return err
+		}
+		log.Printf("dataMessage %v", dataMessage)
+		if strings.HasSuffix(dataMessage.Name, "tgs") {
+			err = handleTgs(&dataMessage, msg)
+		} else if strings.HasSuffix(dataMessage.Name, "zip") {
+			respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(fmt.Sprintf("try analysis %s", dataMessage.Name)))
+			err = handleTgsZip(&dataMessage, msg)
+		}
+		if err != nil {
+			respondErrorMsg := fmt.Sprintf("add sticker error: %v", err)
+			log.Println(respondErrorMsg)
+			return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+		}
+		return nil
+	} else if msg.Category != mixin.MessageCategoryPlainText {
 		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(supported_hint))
 	}
 
@@ -61,6 +88,168 @@ func handleMessage(msg *mixin.MessageView) error {
 	return nil
 }
 
+func handleTgsZip(data *mixin.DataMessage, msg *mixin.MessageView) error {
+	fileName := strings.TrimSuffix(data.Name, filepath.Ext(data.Name))
+	zipFile, err := downloadAttachment(data, fmt.Sprintf("/tmp/%s.zip", fileName))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(zipFile.Name())
+
+	files, err := Unzip(zipFile.Name(), "tmp/outdir")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll("tmp/outdir")
+
+	var replies []*mixin.MessageRequest
+	var clearIds []string
+	for _, fn := range files {
+		if !strings.HasSuffix(fn, "tgs") {
+			continue
+		}
+
+		f, err := os.Open(fn)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+
+		mixinSticker, json, err := handleTgsFile(f, fn, msg)
+		if err != nil {
+			return err
+		}
+
+		clearIds = append(clearIds, mixinSticker.StickerID)
+
+		payload := base64.StdEncoding.EncodeToString(json)
+		id, _ := uuid.FromString(msg.MessageID)
+		newMessageID := uuid.NewV5(id, "reply"+mixinSticker.StickerID).String()
+		reply := &mixin.MessageRequest{
+			ConversationID: msg.ConversationID,
+			RecipientID:    msg.UserID,
+			MessageID:      newMessageID,
+			Category:       mixin.MessageCategoryPlainSticker,
+			Data:           payload,
+		}
+		replies = append(replies, reply)
+	}
+
+	err = removeStickers(clearIds...)
+	if err != nil {
+		log.Printf("removeStickers error: %v", err)
+	}
+
+	log.Printf("replies len: %v", len(replies))
+	if len(replies) == 0 {
+		return respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No sticker found"))
+	}
+
+	chunkSize := 10
+	for i := 0; i < len(replies); i += chunkSize {
+		end := i + chunkSize
+		if end > len(replies) {
+			end = len(replies)
+		}
+		client.SendMessages(ctx, replies[i:end])
+	}
+	return nil
+}
+
+func handleTgs(data *mixin.DataMessage, msg *mixin.MessageView) error {
+	fileName := strings.TrimSuffix(data.Name, filepath.Ext(data.Name))
+	file, err := downloadAttachment(data, fmt.Sprintf("tmp/%s.gzip", fileName))
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+
+	mixinSticker, json, err := handleTgsFile(file, fileName, msg)
+	if err != nil {
+		return err
+	}
+
+	payload := base64.StdEncoding.EncodeToString(json)
+	id, _ := uuid.FromString(msg.MessageID)
+	newMessageID := uuid.NewV5(id, "reply"+mixinSticker.StickerID).String()
+	reply := &mixin.MessageRequest{
+		ConversationID: msg.ConversationID,
+		RecipientID:    msg.UserID,
+		MessageID:      newMessageID,
+		Category:       mixin.MessageCategoryPlainSticker,
+		Data:           payload,
+	}
+	return client.SendMessage(ctx, reply)
+}
+
+func downloadAttachment(data *mixin.DataMessage, fileName string) (*os.File, error) {
+	attachment, err := client.ShowAttachment(ctx, data.AttachmentID)
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := os.Create(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.Get(attachment.ViewURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, err
+	}
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return file, err
+}
+
+func handleTgsFile(file *os.File, fileName string, msg *mixin.MessageView) (*MixinSticker, []byte, error) {
+	unzipFile, err := os.Create(fmt.Sprintf("%s.json", fileName))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer os.Remove(unzipFile.Name())
+
+	fileBytes, err := os.ReadFile(file.Name())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	unzipBytes, err := UngzipData(fileBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = os.WriteFile(unzipFile.Name(), unzipBytes, 0644)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	mixinSticker, err := addSticker(unzipFile.Name())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	json, err := json.Marshal(map[string]string{
+		"sticker_id": mixinSticker.StickerID,
+	})
+	if err != nil {
+		respondErrorMsg := fmt.Sprintf("json marshal error: %v", err)
+		log.Println(respondErrorMsg)
+		return nil, nil, respond(ctx, msg, mixin.MessageCategoryPlainText, []byte(respondErrorMsg))
+	}
+
+	return mixinSticker, json, nil
+}
+
 func handleLottie(content string, msg *mixin.MessageView) error {
 	sticker, err := findByUrl(db, content)
 	if err != nil {
@@ -91,7 +280,7 @@ func handleLottie(content string, msg *mixin.MessageView) error {
 
 	mixinStickerID := sticker.MixinStickerID
 	if mixinStickerID == "" {
-		mixinSticker, err := addSticker(*sticker)
+		mixinSticker, err := addSticker(sticker.LocalUrl)
 		if err != nil {
 			respondErrorMsg = fmt.Sprintf("addSticker error: %v", err)
 			log.Println(respondErrorMsg)
@@ -149,7 +338,7 @@ func handleTgAlbum(content string, msg *mixin.MessageView) error {
 		log.Printf("findByAlbumName error: %v", err)
 	}
 
-	if stickers == nil || len(stickers) == 0 {
+	if len(stickers) == 0 {
 		respond(ctx, msg, mixin.MessageCategoryPlainText, []byte("No cache founded, fetching from Telegram, please wait..."))
 
 		cmdStr := fmt.Sprintf("/usr/bin/python3 spider.py --album=%v", albumName)
@@ -168,7 +357,7 @@ func handleTgAlbum(content string, msg *mixin.MessageView) error {
 	}
 
 	fmt.Println("tg album stickers len:", len(stickers))
-	if stickers != nil && len(stickers) > 0 {
+	if len(stickers) > 0 {
 		return respondSticker(stickers, msg)
 	} else {
 		respondErrorMsg = "Valid stickers not found from Telegram, please try again later or contact developer."
@@ -182,7 +371,7 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 	for _, sticker := range stickers {
 		mixinStickerID := sticker.MixinStickerID
 		if mixinStickerID == "" {
-			mixinSticker, err := addSticker(sticker)
+			mixinSticker, err := addSticker(sticker.LocalUrl)
 			if err != nil {
 				log.Printf("addSticker error: %v", err)
 				continue
@@ -241,7 +430,7 @@ func respondSticker(stickers []Sticker, msg *mixin.MessageView) error {
 
 func respond(ctx context.Context, msg *mixin.MessageView, category string, data []byte) error {
 	id, _ := uuid.FromString(msg.MessageID)
-	newMessageID := uuid.NewV5(id, fmt.Sprintf("reply %v", rand.Intn(100))).String()
+	newMessageID := uuid.NewV5(id, fmt.Sprintf("reply %v", rand.Intn(100000))).String()
 	return sendMessage(ctx, newMessageID, msg.ConversationID, msg.UserID, category, data)
 }
 
